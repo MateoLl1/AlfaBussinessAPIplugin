@@ -70,16 +70,8 @@ function alfa_business_permission_callback(WP_REST_Request $request)
    SECTION 1: ENDPOINTS REST API
 ============================================================================ */
 
+/*  /COMMERCE/PRODUCTS */
 
-// ---------------------------------------------------------------------
-// /V1/COMMERCE/PRODUCTS
-// ---------------------------------------------------------------------
-
-
-/**
- * Registrar la ruta personalizada para buscar productos por keywords (con OR),
- * categoría (opcional) y stock (opcional).
- */
 add_action('rest_api_init', 'register_commerce_products_search_endpoint');
 
 function register_commerce_products_search_endpoint()
@@ -91,16 +83,7 @@ function register_commerce_products_search_endpoint()
   ));
 }
 
-/**
- * Callback que busca productos usando:
- * - keywords (con OR) => ?keywords=["android","64"]
- * - category (opcional) => ?category=["gaming","celulares"]
- * - stock=1 => instock, stock=0 => outofstock (opcional)
- * - limit (opcional) => ?limit=5 (ejemplo)
- *
- * Ejemplo completo:
- * https://www.tu-sitio.com/wp-json/custom/v1/commerce/products?keywords=["android","64"]&category=["GAMING"]&stock=0&limit=5
- */
+
 function search_commerce_products_by_keywords_category_stock(WP_REST_Request $request)
 {
 
@@ -643,9 +626,8 @@ function alfa_business_get_rrss(WP_REST_Request $request)
 
 
 
-
 /* ============================================================================
-   SECTION 2: FUNCIONALIDAD DE SEGUIMIENTO (TRACKING)
+   FUNCIONALIDAD DE SEGUIMIENTO (TRACKING)
 ============================================================================ */
 if (! function_exists('su_obtener_ip')) {
   function su_obtener_ip()
@@ -656,10 +638,7 @@ if (! function_exists('su_obtener_ip')) {
 if (! function_exists('su_determinar_tipo_dispositivo')) {
   function su_determinar_tipo_dispositivo($user_agent)
   {
-    if (strpos($user_agent, 'Mobile') !== false) {
-      return 'mobile';
-    }
-    return 'desktop';
+    return (strpos($user_agent, 'Mobile') !== false) ? 'mobile' : 'desktop';
   }
 }
 if (! function_exists('su_obtener_ubicacion')) {
@@ -673,8 +652,9 @@ register_activation_hook(__FILE__, 'su_crear_tabla_seguimiento');
 function su_crear_tabla_seguimiento()
 {
   global $wpdb;
-  $tabla           = $wpdb->prefix . 'seguimiento_usuario';
+  $tabla = $wpdb->prefix . 'seguimiento_usuario';
   $charset_collate = $wpdb->get_charset_collate();
+
   if ($wpdb->get_var("SHOW TABLES LIKE '{$tabla}'") != $tabla) {
     $sql = "CREATE TABLE {$tabla} (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -692,20 +672,16 @@ function su_crear_tabla_seguimiento()
         ) {$charset_collate};";
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
-    error_log("Tabla {$tabla} creada para seguimiento de usuarios.");
-  } else {
-    error_log("Tabla {$tabla} ya existe.");
   }
 }
 
 function su_capturar_us_id()
 {
-  error_log("Ejecutando su_capturar_us_id(), GET: " . print_r($_GET, true));
   if (isset($_GET['uid']) && ! empty($_GET['uid'])) {
-    $uid         = sanitize_text_field($_GET['uid']);
+    $uid = sanitize_text_field($_GET['uid']);
     $current_url = home_url($_SERVER['REQUEST_URI']);
-    $parametros  = $_GET;
-    error_log("Capturado uid: {$uid} en URL: {$current_url}");
+    $parametros = $_GET;
+
     su_guardar_visita($uid, $current_url, $parametros);
     setcookie('su_uid', $uid, time() + (10 * YEAR_IN_SECONDS), COOKIEPATH, COOKIE_DOMAIN);
     $_COOKIE['su_uid'] = $uid;
@@ -716,20 +692,17 @@ add_action('init', 'su_capturar_us_id', 1);
 function su_registrar_actividad()
 {
   if (isset($_COOKIE['su_uid']) && ! empty($_COOKIE['su_uid'])) {
-    $uid         = sanitize_text_field($_COOKIE['su_uid']);
+    $uid = sanitize_text_field($_COOKIE['su_uid']);
     $current_url = home_url($_SERVER['REQUEST_URI']);
-    $parametros  = $_GET;
-    error_log("Registrando actividad para uid: {$uid} en URL: {$current_url}");
+    $parametros = $_GET;
+
     global $wpdb;
-    $tabla        = $wpdb->prefix . 'seguimiento_usuario';
-    $ultima_visita = $wpdb->get_row($wpdb->prepare("SELECT url FROM {$tabla} WHERE uid = %s ORDER BY fecha DESC LIMIT 1", $uid));
-    if (! $ultima_visita || $ultima_visita->url !== $current_url) {
+    $tabla = $wpdb->prefix . 'seguimiento_usuario';
+    $ultima_visita = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$tabla} WHERE uid = %s AND url = %s", $uid, $current_url));
+
+    if (!$ultima_visita) {
       su_guardar_visita($uid, $current_url, $parametros);
-    } else {
-      error_log("URL ya registrada previamente para uid: {$uid}");
     }
-  } else {
-    error_log("su_registrar_actividad: No se encontró la cookie su_uid.");
   }
 }
 add_action('wp', 'su_registrar_actividad', 1);
@@ -737,68 +710,52 @@ add_action('wp', 'su_registrar_actividad', 1);
 function su_guardar_visita($uid, $url, $parametros)
 {
   global $wpdb;
-  $tabla          = $wpdb->prefix . 'seguimiento_usuario';
-  $ip_address     = su_obtener_ip();
-  $user_agent     = isset($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field($_SERVER['HTTP_USER_AGENT']) : '';
-  $referer        = isset($_SERVER['HTTP_REFERER']) ? esc_url_raw($_SERVER['HTTP_REFERER']) : '';
-  $device_type    = su_determinar_tipo_dispositivo($user_agent);
-  $location       = su_obtener_ubicacion($ip_address);
+  $tabla = $wpdb->prefix . 'seguimiento_usuario';
+  $ip_address = su_obtener_ip();
+  $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
+  $referer = $_SERVER['HTTP_REFERER'] ?? '';
+  $device_type = su_determinar_tipo_dispositivo($user_agent);
+  $location = su_obtener_ubicacion($ip_address);
   $parametros_json = ! empty($parametros) ? wp_json_encode($parametros) : null;
-  error_log("Ejecutando su_guardar_visita() para uid: {$uid} en URL: {$url}");
-  $resultado = $wpdb->insert(
+
+  $wpdb->insert(
     $tabla,
     array(
-      'uid'         => $uid,
-      'url'         => $url,
-      'parametros'  => $parametros_json,
-      'ip_address'  => $ip_address,
-      'user_agent'  => $user_agent,
-      'referer'     => $referer,
+      'uid' => $uid,
+      'url' => $url,
+      'parametros' => $parametros_json,
+      'ip_address' => $ip_address,
+      'user_agent' => $user_agent,
+      'referer' => $referer,
       'device_type' => $device_type,
-      'location'    => $location,
-      'fecha'       => current_time('mysql')
+      'location' => $location,
+      'fecha' => current_time('mysql')
     ),
     array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
   );
-  if ($resultado === false) {
-    error_log("Error al insertar visita para uid: {$uid}. Error: " . $wpdb->last_error);
-  } else {
-    error_log("Visita registrada para uid: {$uid} en URL: {$url}");
-  }
 }
 
-function su_registrar_endpoint_api()
-{
-  register_rest_route('custom/v1', '/user', array(
-    'methods'             => 'GET',
-    'callback'            => 'su_obtener_historial',
-    'args'                => array(
-      'uid' => array(
-        'required'          => true,
-        'sanitize_callback' => 'sanitize_text_field',
-        'validate_callback' => function ($param, $request, $key) {
-          return is_string($param) && ! empty($param);
-        },
-      ),
-    ),
-    'permission_callback' => 'alfa_business_permission_callback',
-  ));
-  error_log("Endpoint REST /custom/v1/user registrado.");
-}
-add_action('rest_api_init', 'su_registrar_endpoint_api');
 function su_obtener_historial(WP_REST_Request $request)
 {
-  $uid     = $request->get_param('uid');
+  $uid = $request->get_param('uid');
   global $wpdb;
-  $tabla    = $wpdb->prefix . 'seguimiento_usuario';
+  $tabla = $wpdb->prefix . 'seguimiento_usuario';
   $resultados = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$tabla} WHERE uid = %s ORDER BY fecha DESC", $uid), ARRAY_A);
-  if (empty($resultados)) {
-    error_log("No se encontró historial para uid: {$uid}");
-    return new WP_Error('no_data', 'No se encontró historial para este uid.', array('status' => 404));
-  }
-  error_log("Historial obtenido para uid: {$uid}");
-  return rest_ensure_response($resultados);
+
+  return empty($resultados) ? new WP_Error('no_data', 'No se encontró historial para este uid.', array('status' => 404)) : rest_ensure_response($resultados);
 }
+
+add_action('rest_api_init', function () {
+  register_rest_route('custom/v1', '/user', array(
+    'methods' => 'GET',
+    'callback' => 'su_obtener_historial',
+    'args' => array(
+      'uid' => array('required' => true, 'sanitize_callback' => 'sanitize_text_field')
+    ),
+    'permission_callback' => 'alfa_business_permission_callback'
+  ));
+});
+
 
 /* ============================================================================
    SECTION 3: ADMIN PANEL - CONFIGURACIÓN ALFA BUSINESS API (SECURITY)
