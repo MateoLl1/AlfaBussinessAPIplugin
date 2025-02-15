@@ -955,32 +955,39 @@ function alfa_business_get_locations(WP_REST_Request $request)
 /* ============================================================================
    SECTION 2: FUNCIONALIDAD DE SEGUIMIENTO (TRACKING)
 ============================================================================ */
+
 if (! function_exists('su_obtener_ip')) {
   function su_obtener_ip()
   {
-    return ! empty($_SERVER['REMOTE_ADDR']) ? sanitize_text_field($_SERVER['REMOTE_ADDR']) : 'sin_ip';
+    return !empty($_SERVER['REMOTE_ADDR']) ? sanitize_text_field($_SERVER['REMOTE_ADDR']) : 'sin_ip';
   }
 }
 if (! function_exists('su_determinar_tipo_dispositivo')) {
   function su_determinar_tipo_dispositivo($user_agent)
   {
-    return (strpos($user_agent, 'Mobile') !== false) ? 'mobile' : 'desktop';
+    // Detección simple: si el user agent contiene "Mobile", consideramos el dispositivo como móvil.
+    if (strpos($user_agent, 'Mobile') !== false) {
+      return 'mobile';
+    }
+    return 'desktop';
   }
 }
 if (! function_exists('su_obtener_ubicacion')) {
   function su_obtener_ubicacion($ip_address)
   {
+    // Función dummy: en producción podrías integrar una API de geolocalización.
     return 'desconocido';
   }
 }
 
+// (1) Crea la tabla de seguimiento al activar el plugin (se utiliza el esquema simplificado)
 register_activation_hook(__FILE__, 'su_crear_tabla_seguimiento');
 function su_crear_tabla_seguimiento()
 {
   global $wpdb;
   $tabla = $wpdb->prefix . 'seguimiento_usuario';
   $charset_collate = $wpdb->get_charset_collate();
-
+  // Se incluyen las columnas adicionales: parámetros, device_type y location.
   if ($wpdb->get_var("SHOW TABLES LIKE '{$tabla}'") != $tabla) {
     $sql = "CREATE TABLE {$tabla} (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -998,89 +1005,123 @@ function su_crear_tabla_seguimiento()
         ) {$charset_collate};";
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
+    error_log("Tabla {$tabla} creada para seguimiento de usuarios.");
+  } else {
+    error_log("Tabla {$tabla} ya existe.");
   }
 }
 
+// (2) Captura el parámetro uid desde GET, establece la cookie y registra la visita.
 function su_capturar_us_id()
 {
-  if (isset($_GET['uid']) && ! empty($_GET['uid'])) {
+  error_log("Ejecutando su_capturar_us_id(), GET: " . print_r($_GET, true));
+  if (isset($_GET['uid']) && !empty($_GET['uid'])) {
     $uid = sanitize_text_field($_GET['uid']);
     $current_url = home_url($_SERVER['REQUEST_URI']);
     $parametros = $_GET;
-
+    error_log("Capturado uid: {$uid} en URL: {$current_url}");
     su_guardar_visita($uid, $current_url, $parametros);
+    // Establece la cookie para futuros registros (10 años)
     setcookie('su_uid', $uid, time() + (10 * YEAR_IN_SECONDS), COOKIEPATH, COOKIE_DOMAIN);
     $_COOKIE['su_uid'] = $uid;
   }
 }
 add_action('init', 'su_capturar_us_id', 1);
 
+// (3) Registra actividad en cada carga de página si existe la cookie.
 function su_registrar_actividad()
 {
-  if (isset($_COOKIE['su_uid']) && ! empty($_COOKIE['su_uid'])) {
+  if (isset($_COOKIE['su_uid']) && !empty($_COOKIE['su_uid'])) {
     $uid = sanitize_text_field($_COOKIE['su_uid']);
     $current_url = home_url($_SERVER['REQUEST_URI']);
     $parametros = $_GET;
-
+    error_log("Registrando actividad para uid: {$uid} en URL: {$current_url}");
     global $wpdb;
     $tabla = $wpdb->prefix . 'seguimiento_usuario';
-    $ultima_visita = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$tabla} WHERE uid = %s AND url = %s", $uid, $current_url));
-
-    if (!$ultima_visita) {
+    $ultima_visita = $wpdb->get_row(
+      $wpdb->prepare("SELECT url FROM {$tabla} WHERE uid = %s ORDER BY fecha DESC LIMIT 1", $uid)
+    );
+    if (! $ultima_visita || $ultima_visita->url !== $current_url) {
       su_guardar_visita($uid, $current_url, $parametros);
+    } else {
+      error_log("URL ya registrada previamente para uid: {$uid}");
     }
+  } else {
+    error_log("su_registrar_actividad: No se encontró la cookie su_uid.");
   }
 }
 add_action('wp', 'su_registrar_actividad', 1);
 
+// (4) Inserta un registro de visita en la base de datos.
 function su_guardar_visita($uid, $url, $parametros)
 {
   global $wpdb;
   $tabla = $wpdb->prefix . 'seguimiento_usuario';
   $ip_address = su_obtener_ip();
-  $user_agent = $_SERVER['HTTP_USER_AGENT'] ?? '';
-  $referer = $_SERVER['HTTP_REFERER'] ?? '';
+  $user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field($_SERVER['HTTP_USER_AGENT']) : '';
+  $referer    = isset($_SERVER['HTTP_REFERER']) ? esc_url_raw($_SERVER['HTTP_REFERER']) : '';
   $device_type = su_determinar_tipo_dispositivo($user_agent);
   $location = su_obtener_ubicacion($ip_address);
-  $parametros_json = ! empty($parametros) ? wp_json_encode($parametros) : null;
-
-  $wpdb->insert(
+  $parametros_json = !empty($parametros) ? wp_json_encode($parametros) : null;
+  error_log("Ejecutando su_guardar_visita() para uid: {$uid} en URL: {$url}");
+  $resultado = $wpdb->insert(
     $tabla,
     array(
-      'uid' => $uid,
-      'url' => $url,
-      'parametros' => $parametros_json,
-      'ip_address' => $ip_address,
-      'user_agent' => $user_agent,
-      'referer' => $referer,
+      'uid'         => $uid,
+      'url'         => $url,
+      'parametros'  => $parametros_json,
+      'ip_address'  => $ip_address,
+      'user_agent'  => $user_agent,
+      'referer'     => $referer,
       'device_type' => $device_type,
-      'location' => $location,
-      'fecha' => current_time('mysql')
+      'location'    => $location,
+      'fecha'       => current_time('mysql')
     ),
     array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
   );
+  if ($resultado === false) {
+    error_log("Error al insertar visita para uid: {$uid}. Error: " . $wpdb->last_error);
+  } else {
+    error_log("Visita registrada para uid: {$uid} en URL: {$url}");
+  }
 }
+
+function su_registrar_endpoint_api()
+{
+  register_rest_route('alfabusiness/api/v1', '/user', array(
+    'methods'             => 'GET',
+    'callback'            => 'su_obtener_historial',
+    'args'                => array(
+      'uid' => array(
+        'required'          => true,
+        'sanitize_callback' => 'sanitize_text_field',
+        'validate_callback' => function ($param, $request, $key) {
+          return is_string($param) && !empty($param);
+        }
+      )
+    ),
+    'permission_callback' => 'alfa_business_permission_callback'
+  ));
+  error_log("Endpoint REST /alfabusiness/api/v1/user registrado.");
+}
+add_action('rest_api_init', 'su_registrar_endpoint_api');
 
 function su_obtener_historial(WP_REST_Request $request)
 {
   $uid = $request->get_param('uid');
   global $wpdb;
   $tabla = $wpdb->prefix . 'seguimiento_usuario';
-  $resultados = $wpdb->get_results($wpdb->prepare("SELECT * FROM {$tabla} WHERE uid = %s ORDER BY fecha DESC", $uid), ARRAY_A);
-
-  return empty($resultados) ? new WP_Error('no_data', 'No se encontró historial para este uid.', array('status' => 404)) : rest_ensure_response($resultados);
+  $resultados = $wpdb->get_results(
+    $wpdb->prepare("SELECT * FROM {$tabla} WHERE uid = %s ORDER BY fecha DESC", $uid),
+    ARRAY_A
+  );
+  if (empty($resultados)) {
+    error_log("No se encontró historial para uid: {$uid}");
+    return new WP_Error('no_data', 'No se encontró historial para este uid.', array('status' => 404));
+  }
+  error_log("Historial obtenido para uid: {$uid}");
+  return rest_ensure_response($resultados);
 }
-
-add_action('rest_api_init', function () {
-  register_rest_route('custom/v1', '/user', array(
-    'methods' => 'GET',
-    'callback' => 'su_obtener_historial',
-    'args' => array(
-      'uid' => array('required' => true, 'sanitize_callback' => 'sanitize_text_field')
-    ),
-    'permission_callback' => 'alfa_business_permission_callback'
-  ));
-});
 
 
 /* ============================================================================
@@ -1171,13 +1212,15 @@ function alfa_business_settings_page()
       }
     }
   }
+  // Botón modificado para eliminar (DROP) la tabla completa de seguimiento y recrearla
   if (isset($_POST['clear_tracking_table'])) {
     if (! isset($_POST['alfa_business_nonce']) || ! wp_verify_nonce($_POST['alfa_business_nonce'], 'alfa_business_save')) {
       echo '<div class="error"><p>Error de seguridad. Inténtalo de nuevo.</p></div>';
     } else {
       $tracking_table = $wpdb->prefix . 'seguimiento_usuario';
-      $resultado      = $wpdb->query("DROP TABLE IF EXISTS $tracking_table");
+      $resultado = $wpdb->query("DROP TABLE IF EXISTS $tracking_table");
       if ($resultado !== false) {
+        // Recrea la tabla inmediatamente
         su_crear_tabla_seguimiento();
         echo '<div class="updated"><p>La tabla de seguimiento ha sido eliminada y recreada correctamente.</p></div>';
       } else {
@@ -1206,6 +1249,7 @@ function alfa_business_settings_page()
       <div style="display: flex; gap: 10px;">
         <?php echo submit_button('Guardar', 'primary', 'alfa_business_submit', false); ?>
         <?php echo submit_button('Limpiar Configuración', 'secondary', 'alfa_business_clear', false); ?>
+        <?php echo submit_button('Limpiar Tabla de Seguimiento', 'secondary', 'clear_tracking_table', false); ?>
       </div>
     </form>
     <!-- Botón para limpiar la caché -->
