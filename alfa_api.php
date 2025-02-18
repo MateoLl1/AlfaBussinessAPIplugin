@@ -161,9 +161,6 @@ function get_web_data(WP_REST_Request $request)
   return new WP_REST_Response(array('Datos' => $data), 200);
 }
 
-
-
-
 // Endpoint: /alfabusiness/api/v1/commerce/keywords
 
 add_action('rest_api_init', function () {
