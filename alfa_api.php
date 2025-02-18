@@ -548,7 +548,8 @@ function get_general_keywords(WP_REST_Request $request)
 
 
 /**
- * Función auxiliar para limpiar el contenido
+ * Función auxiliar para limpiar el contenido.
+ * Elimina shortcodes, etiquetas HTML y normaliza los espacios para devolver solo texto plano.
  */
 function clean_content($raw_content)
 {
@@ -566,10 +567,21 @@ function clean_content($raw_content)
   return $content;
 }
 
+/**
+ * Función auxiliar para agregar el parámetro uid a una URL.
+ * Si se recibe un valor en $uid, se adjunta a la URL usando el separador adecuado.
+ */
+function append_uid_to_url($url, $uid)
+{
+  if (!empty($uid)) {
+    $separator = (strpos($url, '?') !== false) ? '&' : '?';
+    $url .= $separator . 'uid=' . urlencode($uid);
+  }
+  return $url;
+}
 
 
-
-// Endoint: /alfabusiness/api/v1/search/products
+//Endpoint: /alfabusiness/api/v1/search/products
 
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/search/products', array(
@@ -584,19 +596,24 @@ function search_products_by_keywords(WP_REST_Request $request)
   // Obtener parámetros
   $keywords_param = $request->get_param('keywords');
   $limit_param    = $request->get_param('limit');
+  $uid_param      = $request->get_param('uid'); // Parámetro uid opcional
 
   if (empty($keywords_param)) {
     return new WP_Error('missing_keywords', 'El parámetro keywords es obligatorio.', array('status' => 400));
   }
+
+  // Procesar las keywords
   $keywords_array = array_map('trim', explode(',', $keywords_param));
   $keywords_array = array_map('strtolower', $keywords_array);
   $limit = $limit_param ? intval($limit_param) : 10;
 
+  // Obtener todos los productos publicados
   $products = get_posts(array(
     'post_type'   => 'product',
     'post_status' => 'publish',
     'numberposts' => -1,
   ));
+
   $results = array();
 
   foreach ($products as $product) {
@@ -604,6 +621,8 @@ function search_products_by_keywords(WP_REST_Request $request)
     $title       = get_the_title($product_id);
     $raw_content = $product->post_content;
     $plain_content = clean_content($raw_content);
+
+    // Preparar el texto de búsqueda combinando título y contenido limpio
     $text = strtolower($title . ' ' . $plain_content);
     $match_count = 0;
     foreach ($keywords_array as $keyword) {
@@ -611,6 +630,8 @@ function search_products_by_keywords(WP_REST_Request $request)
         $match_count += substr_count($text, $keyword);
       }
     }
+
+    // Incluir el producto si se encontró al menos una coincidencia
     if ($match_count > 0) {
       $additional_data = array();
       if (function_exists('wc_get_product')) {
@@ -629,21 +650,24 @@ function search_products_by_keywords(WP_REST_Request $request)
       $results[] = array_merge(array(
         'ID'          => $product_id,
         'title'       => $title,
-        'url'         => get_permalink($product_id),
+        'url'         => append_uid_to_url(get_permalink($product_id), $uid_param),
         'content'     => $plain_content,
         'match_count' => $match_count
       ), $additional_data);
     }
   }
+
+  // Ordenar resultados por relevancia y limitar la cantidad devuelta
   usort($results, function ($a, $b) {
     return $b['match_count'] - $a['match_count'];
   });
   $results = array_slice($results, 0, $limit);
+
   return new WP_REST_Response(array('results' => $results), 200);
 }
 
 
-// Endoint: /alfabusiness/api/v1/search/pages
+// Endpoint: /alfabusiness/api/v1/search/pages
 
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/search/pages', array(
@@ -657,10 +681,12 @@ function search_pages_by_keywords(WP_REST_Request $request)
 {
   $keywords_param = $request->get_param('keywords');
   $limit_param    = $request->get_param('limit');
+  $uid_param      = $request->get_param('uid');
 
   if (empty($keywords_param)) {
     return new WP_Error('missing_keywords', 'El parámetro keywords es obligatorio.', array('status' => 400));
   }
+
   $keywords_array = array_map('trim', explode(',', $keywords_param));
   $keywords_array = array_map('strtolower', $keywords_array);
   $limit = $limit_param ? intval($limit_param) : 10;
@@ -670,6 +696,7 @@ function search_pages_by_keywords(WP_REST_Request $request)
     'post_status' => 'publish',
     'numberposts' => -1,
   ));
+
   $results = array();
 
   foreach ($pages as $page) {
@@ -678,7 +705,7 @@ function search_pages_by_keywords(WP_REST_Request $request)
     $raw_content = get_post_field('post_content', $page_id);
     $plain_content = clean_content($raw_content);
 
-    // Datos opcionales: limpiar el excerpt usando clean_content
+    // Datos opcionales: excerpt limpiado
     $optional = array();
     $excerpt = get_the_excerpt($page_id);
     if (!empty($excerpt)) {
@@ -695,21 +722,24 @@ function search_pages_by_keywords(WP_REST_Request $request)
       $results[] = array_merge(array(
         'ID'          => $page_id,
         'title'       => $title,
-        'url'         => get_permalink($page_id),
+        'url'         => append_uid_to_url(get_permalink($page_id), $uid_param),
         'content'     => $plain_content,
         'match_count' => $match_count
       ), $optional);
     }
   }
+
   usort($results, function ($a, $b) {
     return $b['match_count'] - $a['match_count'];
   });
   $results = array_slice($results, 0, $limit);
+
   return new WP_REST_Response(array('results' => $results), 200);
 }
 
 
-// Endoint: /alfabusiness/api/v1/search/general
+// Endpoint: /alfabusiness/api/v1/search/general
+
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/search/general', array(
     'methods'             => 'GET',
@@ -722,10 +752,12 @@ function search_general_by_keywords(WP_REST_Request $request)
 {
   $keywords_param = $request->get_param('keywords');
   $limit_param    = $request->get_param('limit');
+  $uid_param      = $request->get_param('uid');
 
   if (empty($keywords_param)) {
     return new WP_Error('missing_keywords', 'El parámetro keywords es obligatorio.', array('status' => 400));
   }
+
   $keywords_array = array_map('trim', explode(',', $keywords_param));
   $keywords_array = array_map('strtolower', $keywords_array);
   $limit = $limit_param ? intval($limit_param) : 10;
@@ -776,7 +808,7 @@ function search_general_by_keywords(WP_REST_Request $request)
         $results[] = array_merge(array(
           'ID'          => $post_id,
           'title'       => $title,
-          'url'         => get_permalink($post_id),
+          'url'         => append_uid_to_url(get_permalink($post_id), $uid_param),
           'post_type'   => $post_type,
           'content'     => $plain_content,
           'match_count' => $match_count
@@ -788,6 +820,7 @@ function search_general_by_keywords(WP_REST_Request $request)
     return $b['match_count'] - $a['match_count'];
   });
   $results = array_slice($results, 0, $limit);
+
   return new WP_REST_Response(array('results' => $results), 200);
 }
 
