@@ -645,11 +645,10 @@ function search_products_by_keywords(WP_REST_Request $request)
 
 
 // Endpoint: /alfabusiness/api/v1/search/pages
-
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/search/pages', array(
-    'methods'  => 'GET',
-    'callback' => 'search_pages_by_keywords',
+    'methods'             => 'GET',
+    'callback'            => 'search_pages_by_keywords',
     'permission_callback' => 'alfa_business_permission_callback'
   ));
 });
@@ -681,13 +680,19 @@ function search_pages_by_keywords(WP_REST_Request $request)
 
   $results = array();
 
-  // Recorrer cada página para contar coincidencias
+  // Recorrer cada página para contar coincidencias y obtener datos limpios
   foreach ($pages as $page) {
     $page_id = $page->ID;
     $title   = get_the_title($page_id);
-    $content = $page->post_content;
-    // Combinar título y contenido y convertir a minúsculas
-    $text = strtolower($title . ' ' . strip_tags($content));
+
+    // Limpiar el contenido: quitar shortcodes, eliminar etiquetas HTML y caracteres especiales
+    $content = get_post_field('post_content', $page_id);
+    $content = strip_shortcodes($content);
+    $content = preg_replace('/\[[^\]]*\]/', '', $content);
+    $cleaned_content = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($content)));
+
+    // Combinar título y contenido limpio para la búsqueda
+    $text = strtolower($title . ' ' . $cleaned_content);
     $match_count = 0;
 
     // Contar las ocurrencias de cada keyword en el texto
@@ -697,18 +702,19 @@ function search_pages_by_keywords(WP_REST_Request $request)
       }
     }
 
-    // Incluir la página solo si se encontró al menos una coincidencia
+    // Incluir la página si se encontró al menos una coincidencia
     if ($match_count > 0) {
       $results[] = array(
         'ID'          => $page_id,
         'title'       => $title,
         'url'         => get_permalink($page_id),
-        'match_count' => $match_count, // Opcional: elimina este campo si no deseas mostrar la cantidad de coincidencias
+        'content'     => $cleaned_content,
+        'match_count' => $match_count
       );
     }
   }
 
-  // Ordenar los resultados de mayor a menor según el número de coincidencias
+  // Ordenar los resultados de mayor a menor por número de coincidencias
   usort($results, function ($a, $b) {
     return $b['match_count'] - $a['match_count'];
   });
@@ -723,8 +729,8 @@ function search_pages_by_keywords(WP_REST_Request $request)
 // Endpoint: /alfabusiness/api/v1/search/general
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/search/general', array(
-    'methods'  => 'GET',
-    'callback' => 'search_general_by_keywords',
+    'methods'             => 'GET',
+    'callback'            => 'search_general_by_keywords',
     'permission_callback' => 'alfa_business_permission_callback'
   ));
 });
@@ -761,9 +767,15 @@ function search_general_by_keywords(WP_REST_Request $request)
     foreach ($posts as $post) {
       $post_id = $post->ID;
       $title   = get_the_title($post_id);
-      $content = $post->post_content;
-      // Combinar título y contenido, limpiar etiquetas y convertir a minúsculas
-      $text = strtolower($title . ' ' . strip_tags($content));
+
+      // Limpiar el contenido: quitar shortcodes, eliminar etiquetas HTML y caracteres especiales
+      $raw_content    = $post->post_content;
+      $content        = strip_shortcodes($raw_content);
+      $content        = preg_replace('/\[[^\]]*\]/', '', $content);
+      $cleaned_content = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($content)));
+
+      // Combinar título y contenido limpio para la búsqueda
+      $text = strtolower($title . ' ' . $cleaned_content);
       $match_count = 0;
 
       // Contar las ocurrencias de cada keyword en el texto
@@ -780,13 +792,14 @@ function search_general_by_keywords(WP_REST_Request $request)
           'title'       => $title,
           'url'         => get_permalink($post_id),
           'post_type'   => $post_type,
-          'match_count' => $match_count, // Este campo indica la relevancia
+          'content'     => $cleaned_content,
+          'match_count' => $match_count
         );
       }
     }
   }
 
-  // Ordenar los resultados de mayor a menor por el número de coincidencias (relevancia)
+  // Ordenar los resultados de mayor a menor según el número de coincidencias (relevancia)
   usort($results, function ($a, $b) {
     return $b['match_count'] - $a['match_count'];
   });
@@ -796,6 +809,7 @@ function search_general_by_keywords(WP_REST_Request $request)
 
   return new WP_REST_Response(array('results' => $results), 200);
 }
+
 
 
 // Endpoint: /alfabusiness/api/v1/metrics
