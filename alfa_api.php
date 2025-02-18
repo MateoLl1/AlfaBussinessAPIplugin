@@ -949,7 +949,7 @@ function get_metrics_data(WP_REST_Request $request)
   // ----------------------------
   $tabla_tracking = $wpdb->prefix . 'seguimiento_usuario';
   $registered_uids = $wpdb->get_col("SELECT DISTINCT uid FROM {$tabla_tracking}");
-  $registered_users_count = is_array($registered_uids) ? count($registered_uids) : 0;
+
 
   $today_start = date('Y-m-d') . " 00:00:00";
   $today_uids = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT uid FROM {$tabla_tracking} WHERE fecha >= %s", $today_start));
@@ -957,7 +957,6 @@ function get_metrics_data(WP_REST_Request $request)
 
   $tracking_metrics = array(
     'registered_users_count' => $registered_users_count,
-    'registered_users'       => $registered_uids,
     'today_users_count'      => $today_users_count,
     'today_users'            => $today_uids,
   );
@@ -973,8 +972,6 @@ function get_metrics_data(WP_REST_Request $request)
 
   return new WP_REST_Response($data, 200);
 }
-
-
 
 
 // Endpoint: /alfabusiness/api/v1/rrss
@@ -1574,7 +1571,7 @@ function alfa_business_locations_settings_section()
    SECTION 5: CONFIGURACIÓN DE REDES SOCIALES
 ============================================================================ */
   /**
-   * Crea la tabla de Redes Sociales.
+   * Crea la tabla de Parametros.
    */
   function alfa_business_create_rrss_table()
   {
@@ -1677,6 +1674,14 @@ function alfa_business_locations_settings_section()
         $editing = true;
       }
     }
+
+
+    /* ============================================================================
+      SECTION 6: SEGUIMIENTO NATIVO
+    ============================================================================ */
+
+
+
     ?>
     <div class="wrap">
       <hr>
