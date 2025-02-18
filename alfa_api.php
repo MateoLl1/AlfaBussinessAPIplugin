@@ -928,8 +928,8 @@ function get_metrics_data(WP_REST_Request $request)
       $i++;
     }
 
-    $visits_total = intval($web_metrics['visits']['total']);
-    $conversion_rate = ($visits_total > 0) ? ($order_count / $visits_total) * 100 : 0;
+    $visits_total_calc = intval($web_metrics['visits']['total']);
+    $conversion_rate = ($visits_total_calc > 0) ? ($order_count / $visits_total_calc) * 100 : 0;
 
     $product_count = wp_count_posts('product');
     $products_published = isset($product_count->publish) ? intval($product_count->publish) : 0;
@@ -949,7 +949,7 @@ function get_metrics_data(WP_REST_Request $request)
   // ----------------------------
   $tabla_tracking = $wpdb->prefix . 'seguimiento_usuario';
   $registered_uids = $wpdb->get_col("SELECT DISTINCT uid FROM {$tabla_tracking}");
-
+  $registered_users_count = is_array($registered_uids) ? count($registered_uids) : 0;
 
   $today_start = date('Y-m-d') . " 00:00:00";
   $today_uids = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT uid FROM {$tabla_tracking} WHERE fecha >= %s", $today_start));
@@ -972,6 +972,8 @@ function get_metrics_data(WP_REST_Request $request)
 
   return new WP_REST_Response($data, 200);
 }
+
+
 
 
 // Endpoint: /alfabusiness/api/v1/rrss
