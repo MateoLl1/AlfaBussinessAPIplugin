@@ -546,11 +546,12 @@ function get_general_keywords(WP_REST_Request $request)
 }
 
 
-// Endpoint: /alfabusiness/api/v1/search/pages
+
+// Endpoint: /alfabusiness/api/v1/search/products
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/search/products', array(
-    'methods'  => 'GET',
-    'callback' => 'search_products_by_keywords',
+    'methods'             => 'GET',
+    'callback'            => 'search_products_by_keywords',
     'permission_callback' => 'alfa_business_permission_callback'
   ));
 });
@@ -566,7 +567,7 @@ function search_products_by_keywords(WP_REST_Request $request)
     return new WP_Error('missing_keywords', 'El parámetro keywords es obligatorio.', array('status' => 400));
   }
 
-  // Convertir la lista separada por comas en un array y pasarlo a minúsculas
+  // Convertir la lista separada por comas en un array y convertir a minúsculas
   $keywords_array = array_map('trim', explode(',', $keywords_param));
   $keywords_array = array_map('strtolower', $keywords_array);
 
@@ -582,13 +583,19 @@ function search_products_by_keywords(WP_REST_Request $request)
 
   $results = array();
 
-  // Recorrer cada producto para contar coincidencias
+  // Recorrer cada producto para contar coincidencias y obtener datos opcionales
   foreach ($products as $product) {
     $product_id = $product->ID;
     $title      = get_the_title($product_id);
-    $content    = $product->post_content;
-    // Combinar título y contenido y convertir a minúsculas
-    $text = strtolower($title . ' ' . strip_tags($content));
+    $raw_content = $product->post_content;
+
+    // Eliminar shortcodes o contenido entre corchetes y quitar etiquetas HTML para obtener texto plano
+    $clean_content = preg_replace('/\[[^\]]*\]/', '', $raw_content);
+    $plain_content = wp_strip_all_tags($clean_content);
+    $plain_content = trim(preg_replace('/\s+/', ' ', $plain_content));
+
+    // Preparar el texto de búsqueda combinando título y contenido limpio
+    $text = strtolower($title . ' ' . $plain_content);
     $match_count = 0;
 
     // Contar las ocurrencias de cada keyword en el texto
@@ -600,16 +607,31 @@ function search_products_by_keywords(WP_REST_Request $request)
 
     // Incluir el producto solo si se encontró al menos una coincidencia
     if ($match_count > 0) {
-      $results[] = array(
+      $additional_data = array();
+      if (function_exists('wc_get_product')) {
+        $wc_product = wc_get_product($product_id);
+        if ($wc_product) {
+          $additional_data = array(
+            'short_description' => wp_strip_all_tags($wc_product->get_short_description()),
+            'price'             => $wc_product->get_price(),
+            'regular_price'     => $wc_product->get_regular_price(),
+            'sale_price'        => $wc_product->get_sale_price(),
+            'sku'               => $wc_product->get_sku(),
+            'image'             => get_the_post_thumbnail_url($product_id, 'full')
+          );
+        }
+      }
+      $results[] = array_merge(array(
         'ID'          => $product_id,
         'title'       => $title,
         'url'         => get_permalink($product_id),
-        'match_count' => $match_count, // Opcional; puedes quitar este campo si solo necesitas la lista
-      );
+        'content'     => $plain_content,
+        'match_count' => $match_count
+      ), $additional_data);
     }
   }
 
-  // Ordenar los resultados de mayor a menor según el número de coincidencias
+  // Ordenar los resultados de mayor a menor según el número de coincidencias (relevancia)
   usort($results, function ($a, $b) {
     return $b['match_count'] - $a['match_count'];
   });
@@ -619,6 +641,8 @@ function search_products_by_keywords(WP_REST_Request $request)
 
   return new WP_REST_Response(array('results' => $results), 200);
 }
+
+
 
 // Endpoint: /alfabusiness/api/v1/search/pages
 
