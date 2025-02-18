@@ -547,7 +547,30 @@ function get_general_keywords(WP_REST_Request $request)
 
 
 
-// Endpoint: /alfabusiness/api/v1/search/products
+/**
+ * Función auxiliar para limpiar el contenido
+ */
+function clean_content($raw_content)
+{
+  if (empty($raw_content)) {
+    return '';
+  }
+  // Quitar shortcodes registrados
+  $content = strip_shortcodes($raw_content);
+  // Remover shortcodes anidados o no registrados mediante regex
+  $content = preg_replace('/\[(\/?)[^\]]+\]/', '', $content);
+  // Eliminar todas las etiquetas HTML
+  $content = wp_strip_all_tags($content);
+  // Normalizar espacios
+  $content = trim(preg_replace('/\s+/', ' ', $content));
+  return $content;
+}
+
+
+
+
+// Endoint: /alfabusiness/api/v1/search/products
+
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/search/products', array(
     'methods'             => 'GET',
@@ -562,50 +585,32 @@ function search_products_by_keywords(WP_REST_Request $request)
   $keywords_param = $request->get_param('keywords');
   $limit_param    = $request->get_param('limit');
 
-  // Validar que se haya enviado el parámetro keywords
   if (empty($keywords_param)) {
     return new WP_Error('missing_keywords', 'El parámetro keywords es obligatorio.', array('status' => 400));
   }
-
-  // Convertir la lista separada por comas en un array y convertir a minúsculas
   $keywords_array = array_map('trim', explode(',', $keywords_param));
   $keywords_array = array_map('strtolower', $keywords_array);
-
-  // Definir el límite de resultados (por defecto 10)
   $limit = $limit_param ? intval($limit_param) : 10;
 
-  // Obtener todos los productos publicados
   $products = get_posts(array(
     'post_type'   => 'product',
     'post_status' => 'publish',
     'numberposts' => -1,
   ));
-
   $results = array();
 
-  // Recorrer cada producto para contar coincidencias y obtener datos opcionales
   foreach ($products as $product) {
-    $product_id = $product->ID;
-    $title      = get_the_title($product_id);
+    $product_id  = $product->ID;
+    $title       = get_the_title($product_id);
     $raw_content = $product->post_content;
-
-    // Eliminar shortcodes o contenido entre corchetes y quitar etiquetas HTML para obtener texto plano
-    $clean_content = preg_replace('/\[[^\]]*\]/', '', $raw_content);
-    $plain_content = wp_strip_all_tags($clean_content);
-    $plain_content = trim(preg_replace('/\s+/', ' ', $plain_content));
-
-    // Preparar el texto de búsqueda combinando título y contenido limpio
+    $plain_content = clean_content($raw_content);
     $text = strtolower($title . ' ' . $plain_content);
     $match_count = 0;
-
-    // Contar las ocurrencias de cada keyword en el texto
     foreach ($keywords_array as $keyword) {
       if (!empty($keyword)) {
         $match_count += substr_count($text, $keyword);
       }
     }
-
-    // Incluir el producto solo si se encontró al menos una coincidencia
     if ($match_count > 0) {
       $additional_data = array();
       if (function_exists('wc_get_product')) {
@@ -630,21 +635,16 @@ function search_products_by_keywords(WP_REST_Request $request)
       ), $additional_data);
     }
   }
-
-  // Ordenar los resultados de mayor a menor según el número de coincidencias (relevancia)
   usort($results, function ($a, $b) {
     return $b['match_count'] - $a['match_count'];
   });
-
-  // Limitar el número de resultados devueltos
   $results = array_slice($results, 0, $limit);
-
   return new WP_REST_Response(array('results' => $results), 200);
 }
 
 
+// Endoint: /alfabusiness/api/v1/search/pages
 
-// Endpoint: /alfabusiness/api/v1/search/pages
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/search/pages', array(
     'methods'             => 'GET',
@@ -655,78 +655,61 @@ add_action('rest_api_init', function () {
 
 function search_pages_by_keywords(WP_REST_Request $request)
 {
-  // Obtener parámetros
   $keywords_param = $request->get_param('keywords');
   $limit_param    = $request->get_param('limit');
 
-  // Validar que se haya enviado el parámetro keywords
   if (empty($keywords_param)) {
     return new WP_Error('missing_keywords', 'El parámetro keywords es obligatorio.', array('status' => 400));
   }
-
-  // Convertir la lista separada por comas en un array y pasarlo a minúsculas
   $keywords_array = array_map('trim', explode(',', $keywords_param));
   $keywords_array = array_map('strtolower', $keywords_array);
-
-  // Definir el límite de resultados (por defecto 10)
   $limit = $limit_param ? intval($limit_param) : 10;
 
-  // Obtener todas las páginas publicadas
   $pages = get_posts(array(
     'post_type'   => 'page',
     'post_status' => 'publish',
     'numberposts' => -1,
   ));
-
   $results = array();
 
-  // Recorrer cada página para contar coincidencias y obtener datos limpios
   foreach ($pages as $page) {
     $page_id = $page->ID;
     $title   = get_the_title($page_id);
+    $raw_content = get_post_field('post_content', $page_id);
+    $plain_content = clean_content($raw_content);
 
-    // Limpiar el contenido: quitar shortcodes, eliminar etiquetas HTML y caracteres especiales
-    $content = get_post_field('post_content', $page_id);
-    $content = strip_shortcodes($content);
-    $content = preg_replace('/\[[^\]]*\]/', '', $content);
-    $cleaned_content = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($content)));
-
-    // Combinar título y contenido limpio para la búsqueda
-    $text = strtolower($title . ' ' . $cleaned_content);
+    // Datos opcionales: limpiar el excerpt usando clean_content
+    $optional = array();
+    $excerpt = get_the_excerpt($page_id);
+    if (!empty($excerpt)) {
+      $optional['excerpt'] = clean_content($excerpt);
+    }
+    $text = strtolower($title . ' ' . $plain_content);
     $match_count = 0;
-
-    // Contar las ocurrencias de cada keyword en el texto
     foreach ($keywords_array as $keyword) {
       if (!empty($keyword)) {
         $match_count += substr_count($text, $keyword);
       }
     }
-
-    // Incluir la página si se encontró al menos una coincidencia
     if ($match_count > 0) {
-      $results[] = array(
+      $results[] = array_merge(array(
         'ID'          => $page_id,
         'title'       => $title,
         'url'         => get_permalink($page_id),
-        'content'     => $cleaned_content,
+        'content'     => $plain_content,
         'match_count' => $match_count
-      );
+      ), $optional);
     }
   }
-
-  // Ordenar los resultados de mayor a menor por número de coincidencias
   usort($results, function ($a, $b) {
     return $b['match_count'] - $a['match_count'];
   });
-
-  // Limitar el número de resultados devueltos
   $results = array_slice($results, 0, $limit);
-
   return new WP_REST_Response(array('results' => $results), 200);
 }
 
 
-// Endpoint: /alfabusiness/api/v1/search/general
+// Endoint: /alfabusiness/api/v1/search/general
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/search/general', array(
     'methods'             => 'GET',
@@ -737,24 +720,17 @@ add_action('rest_api_init', function () {
 
 function search_general_by_keywords(WP_REST_Request $request)
 {
-  // Obtener parámetros
   $keywords_param = $request->get_param('keywords');
   $limit_param    = $request->get_param('limit');
 
   if (empty($keywords_param)) {
     return new WP_Error('missing_keywords', 'El parámetro keywords es obligatorio.', array('status' => 400));
   }
-
-  // Convertir la lista separada por comas en un array y convertir a minúsculas
   $keywords_array = array_map('trim', explode(',', $keywords_param));
   $keywords_array = array_map('strtolower', $keywords_array);
-
-  // Definir el límite de resultados (por defecto 10)
   $limit = $limit_param ? intval($limit_param) : 10;
 
   $results = array();
-
-  // Tipos de contenido a buscar: productos y páginas
   $post_types = array('product', 'page');
 
   foreach ($post_types as $post_type) {
@@ -763,50 +739,55 @@ function search_general_by_keywords(WP_REST_Request $request)
       'post_status' => 'publish',
       'numberposts' => -1,
     ));
-
     foreach ($posts as $post) {
       $post_id = $post->ID;
       $title   = get_the_title($post_id);
-
-      // Limpiar el contenido: quitar shortcodes, eliminar etiquetas HTML y caracteres especiales
-      $raw_content    = $post->post_content;
-      $content        = strip_shortcodes($raw_content);
-      $content        = preg_replace('/\[[^\]]*\]/', '', $content);
-      $cleaned_content = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($content)));
-
-      // Combinar título y contenido limpio para la búsqueda
-      $text = strtolower($title . ' ' . $cleaned_content);
+      $raw_content = $post->post_content;
+      $plain_content = clean_content($raw_content);
+      $optional = array();
+      if ($post_type === 'product') {
+        if (function_exists('wc_get_product')) {
+          $wc_product = wc_get_product($post_id);
+          if ($wc_product) {
+            $optional = array(
+              'short_description' => wp_strip_all_tags($wc_product->get_short_description()),
+              'price'             => $wc_product->get_price(),
+              'regular_price'     => $wc_product->get_regular_price(),
+              'sale_price'        => $wc_product->get_sale_price(),
+              'sku'               => $wc_product->get_sku(),
+              'image'             => get_the_post_thumbnail_url($post_id, 'full')
+            );
+          }
+        }
+      } elseif ($post_type === 'page') {
+        $excerpt = get_the_excerpt($post_id);
+        if (!empty($excerpt)) {
+          $optional['excerpt'] = clean_content($excerpt);
+        }
+      }
+      $text = strtolower($title . ' ' . $plain_content);
       $match_count = 0;
-
-      // Contar las ocurrencias de cada keyword en el texto
       foreach ($keywords_array as $keyword) {
         if (!empty($keyword)) {
           $match_count += substr_count($text, $keyword);
         }
       }
-
-      // Si se encontró al menos una coincidencia, se añade al resultado
       if ($match_count > 0) {
-        $results[] = array(
+        $results[] = array_merge(array(
           'ID'          => $post_id,
           'title'       => $title,
           'url'         => get_permalink($post_id),
           'post_type'   => $post_type,
-          'content'     => $cleaned_content,
+          'content'     => $plain_content,
           'match_count' => $match_count
-        );
+        ), $optional);
       }
     }
   }
-
-  // Ordenar los resultados de mayor a menor según el número de coincidencias (relevancia)
   usort($results, function ($a, $b) {
     return $b['match_count'] - $a['match_count'];
   });
-
-  // Limitar el número de resultados devueltos
   $results = array_slice($results, 0, $limit);
-
   return new WP_REST_Response(array('results' => $results), 200);
 }
 
@@ -815,8 +796,8 @@ function search_general_by_keywords(WP_REST_Request $request)
 // Endpoint: /alfabusiness/api/v1/metrics
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/metrics', array(
-    'methods'  => 'GET',
-    'callback' => 'get_metrics_data',
+    'methods'             => 'GET',
+    'callback'            => 'get_metrics_data',
     'permission_callback' => 'alfa_business_permission_callback'
   ));
 });
@@ -845,7 +826,6 @@ function get_metrics_data(WP_REST_Request $request)
     'taxonomy'   => 'post_tag',
     'hide_empty' => true,
   ));
-  // Se pueden incluir de forma separada o combinadas
   $web_metrics['categories'] = is_array($categories) ? count($categories) : 0;
   $web_metrics['tags'] = is_array($tags) ? count($tags) : 0;
 
@@ -856,40 +836,38 @@ function get_metrics_data(WP_REST_Request $request)
     'pending'  => isset($comment_count->awaiting_moderation) ? intval($comment_count->awaiting_moderation) : 0,
   );
 
-  // Estadísticas de visitas:
-  // Si cuentas con un sistema de tracking (por ejemplo, Google Analytics o un plugin interno),
-  // aquí se integraría la extracción de datos. En este ejemplo se usan valores ficticios.
+  // Visitas: Usar valores reales almacenados en la base de datos (se asume que se almacenan en opciones)
+  $visits_total  = get_option('alfa_business_visits_total', 0);
+  $unique_visits = get_option('alfa_business_unique_visits', 0);
   $web_metrics['visits'] = array(
-    'total'  => 5000,  // valor de ejemplo
-    'unique' => 3200,  // valor de ejemplo
+    'total'  => intval($visits_total),
+    'unique' => intval($unique_visits)
   );
 
   // ----------------------------
   // Métricas del E-commerce
   // ----------------------------
   $ecommerce_metrics = array(
-    'orders'         => 0,
-    'total_sales'    => 0.0,
-    'average_order'  => 0.0,
-    'top_products'   => array(),
+    'orders'          => 0,
+    'total_sales'     => 0.0,
+    'average_order'   => 0.0,
+    'top_products'    => array(),
     'conversion_rate' => 0.0,
   );
 
   if (class_exists('WooCommerce')) {
-    // Obtener todos los pedidos (se recomienda usar caching para evitar consultas masivas)
+    // Obtener todos los pedidos (recomendado usar caching en entornos de alta carga)
     $orders = wc_get_orders(array(
       'limit'  => -1,
-      // Considera los estados que sean relevantes para tus métricas
       'status' => array('wc-completed', 'wc-processing', 'wc-on-hold'),
     ));
 
-    $order_count = count($orders);
-    $total_sales = 0;
-    $product_sales = array(); // clave: product_id, valor: cantidad vendida
+    $order_count   = count($orders);
+    $total_sales   = 0;
+    $product_sales = array();
 
     foreach ($orders as $order) {
       $total_sales += floatval($order->get_total());
-      // Recorrer items del pedido
       foreach ($order->get_items() as $item) {
         $product_id = $item->get_product_id();
         $qty = $item->get_quantity();
@@ -903,7 +881,7 @@ function get_metrics_data(WP_REST_Request $request)
 
     $average_order = $order_count > 0 ? $total_sales / $order_count : 0;
 
-    // Productos más vendidos (top N, en este ejemplo top 5)
+    // Productos más vendidos (top 5)
     arsort($product_sales);
     $top_products = array();
     $top_limit = 5;
@@ -921,15 +899,15 @@ function get_metrics_data(WP_REST_Request $request)
       $i++;
     }
 
-    // Tasa de conversión (si se tiene la información de visitas)
-    $visits_total = $web_metrics['visits']['total'];
+    // Tasa de conversión: (número de pedidos / total de visitas) * 100
+    $visits_total = intval($web_metrics['visits']['total']);
     $conversion_rate = ($visits_total > 0) ? ($order_count / $visits_total) * 100 : 0;
 
     $ecommerce_metrics = array(
-      'orders'         => $order_count,
-      'total_sales'    => round($total_sales, 2),
-      'average_order'  => round($average_order, 2),
-      'top_products'   => $top_products,
+      'orders'          => $order_count,
+      'total_sales'     => round($total_sales, 2),
+      'average_order'   => round($average_order, 2),
+      'top_products'    => $top_products,
       'conversion_rate' => round($conversion_rate, 2),
     );
   }
@@ -941,6 +919,8 @@ function get_metrics_data(WP_REST_Request $request)
 
   return new WP_REST_Response($data, 200);
 }
+
+
 
 
 // Endpoint: /alfabusiness/api/v1/rrss
