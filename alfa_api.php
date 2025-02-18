@@ -834,17 +834,17 @@ add_action('rest_api_init', function () {
 
 function get_metrics_data(WP_REST_Request $request)
 {
+  global $wpdb;
+
   // ----------------------------
   // Métricas de la Web
   // ----------------------------
-
-  // Posts y páginas publicados
   $post_count = wp_count_posts('post');
   $page_count = wp_count_posts('page');
 
   $web_metrics = array(
-    'posts' => isset($post_count->publish) ? intval($post_count->publish) : 0,
-    'pages' => isset($page_count->publish) ? intval($page_count->publish) : 0,
+    'posts'      => isset($post_count->publish) ? intval($post_count->publish) : 0,
+    'pages'      => isset($page_count->publish) ? intval($page_count->publish) : 0,
   );
 
   // Número de categorías y etiquetas utilizadas
@@ -857,7 +857,7 @@ function get_metrics_data(WP_REST_Request $request)
     'hide_empty' => true,
   ));
   $web_metrics['categories'] = is_array($categories) ? count($categories) : 0;
-  $web_metrics['tags'] = is_array($tags) ? count($tags) : 0;
+  $web_metrics['tags']       = is_array($tags) ? count($tags) : 0;
 
   // Comentarios: aprobados y pendientes
   $comment_count = wp_count_comments();
@@ -866,7 +866,7 @@ function get_metrics_data(WP_REST_Request $request)
     'pending'  => isset($comment_count->awaiting_moderation) ? intval($comment_count->awaiting_moderation) : 0,
   );
 
-  // Visitas: Usar valores reales almacenados en la base de datos (se asume que se almacenan en opciones)
+  // Visitas: Obtener valores reales almacenados en la base de datos (se espera que el tracking los actualice)
   $visits_total  = get_option('alfa_business_visits_total', 0);
   $unique_visits = get_option('alfa_business_unique_visits', 0);
   $web_metrics['visits'] = array(
@@ -883,10 +883,10 @@ function get_metrics_data(WP_REST_Request $request)
     'average_order'   => 0.0,
     'top_products'    => array(),
     'conversion_rate' => 0.0,
+    'products'        => 0,
   );
 
   if (class_exists('WooCommerce')) {
-    // Obtener todos los pedidos (recomendado usar caching en entornos de alta carga)
     $orders = wc_get_orders(array(
       'limit'  => -1,
       'status' => array('wc-completed', 'wc-processing', 'wc-on-hold'),
@@ -911,7 +911,6 @@ function get_metrics_data(WP_REST_Request $request)
 
     $average_order = $order_count > 0 ? $total_sales / $order_count : 0;
 
-    // Productos más vendidos (top 5)
     arsort($product_sales);
     $top_products = array();
     $top_limit = 5;
@@ -929,9 +928,11 @@ function get_metrics_data(WP_REST_Request $request)
       $i++;
     }
 
-    // Tasa de conversión: (número de pedidos / total de visitas) * 100
     $visits_total = intval($web_metrics['visits']['total']);
     $conversion_rate = ($visits_total > 0) ? ($order_count / $visits_total) * 100 : 0;
+
+    $product_count = wp_count_posts('product');
+    $products_published = isset($product_count->publish) ? intval($product_count->publish) : 0;
 
     $ecommerce_metrics = array(
       'orders'          => $order_count,
@@ -939,12 +940,35 @@ function get_metrics_data(WP_REST_Request $request)
       'average_order'   => round($average_order, 2),
       'top_products'    => $top_products,
       'conversion_rate' => round($conversion_rate, 2),
+      'products'        => $products_published,
     );
   }
 
+  // ----------------------------
+  // Métricas de Tracking (basadas en uids)
+  // ----------------------------
+  $tabla_tracking = $wpdb->prefix . 'seguimiento_usuario';
+  $registered_uids = $wpdb->get_col("SELECT DISTINCT uid FROM {$tabla_tracking}");
+  $registered_users_count = is_array($registered_uids) ? count($registered_uids) : 0;
+
+  $today_start = date('Y-m-d') . " 00:00:00";
+  $today_uids = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT uid FROM {$tabla_tracking} WHERE fecha >= %s", $today_start));
+  $today_users_count = is_array($today_uids) ? count($today_uids) : 0;
+
+  $tracking_metrics = array(
+    'registered_users_count' => $registered_users_count,
+    'registered_users'       => $registered_uids,
+    'today_users_count'      => $today_users_count,
+    'today_users'            => $today_uids,
+  );
+
+  // Combinar métricas en dos objetos: uno para "web" y otro para "tracking"
   $data = array(
-    'web'       => $web_metrics,
-    'ecommerce' => $ecommerce_metrics,
+    'web' => array(
+      'web_info'    => $web_metrics,
+      'ecommerce'   => $ecommerce_metrics,
+    ),
+    'tracking' => $tracking_metrics,
   );
 
   return new WP_REST_Response($data, 200);
@@ -1440,15 +1464,15 @@ function alfa_business_locations_settings_section()
       <table class="form-table">
         <tr>
           <th scope="row"><label for="location_id">ID</label></th>
-          <td><input type="text" name="location_id" id="location_id" placeholder="ej: caracol" class="regular-text" disabled value="<?php echo $editing ? esc_attr($edit_record['location_id']) : ''; ?>"></td>
+          <td><input type="text" name="location_id" id="location_id" placeholder="ID secuencial" class="regular-text" disabled value="<?php echo $editing ? esc_attr($edit_record['location_id']) : ''; ?>"></td>
         </tr>
         <tr>
           <th scope="row"><label for="url_ubicacion">URL Ubicación</label></th>
-          <td><input type="text" name="url_ubicacion" id="url_ubicacion" placeholder="https://www.nyc.com.ec/ubicaciones?location=caracol" class="regular-text" required value="<?php echo $editing ? esc_attr($edit_record['url_ubicacion']) : ''; ?>"></td>
+          <td><input type="text" name="url_ubicacion" id="url_ubicacion" placeholder="https://www.google.com" class="regular-text" required value="<?php echo $editing ? esc_attr($edit_record['url_ubicacion']) : ''; ?>"></td>
         </tr>
         <tr>
           <th scope="row"><label for="user_id">User ID</label></th>
-          <td><input type="text" name="user_id" id="user_id" placeholder="ej: 39" class="regular-text" required value="<?php echo $editing ? esc_attr($edit_record['user_id']) : ''; ?>"></td>
+          <td><input type="text" name="user_id" id="user_id" placeholder="" class="regular-text" required value="<?php echo $editing ? esc_attr($edit_record['user_id']) : ''; ?>"></td>
         </tr>
         <tr>
           <th scope="row"><label for="nombre">Nombre</label></th>
@@ -1565,7 +1589,7 @@ function alfa_business_locations_settings_section()
     ) $charset_collate;";
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
-    error_log("Tabla $table_name creada/actualizada para Redes Sociales.");
+    error_log("Tabla $table_name creada/actualizada para Paarametros.");
   }
   register_activation_hook(__FILE__, 'alfa_business_create_rrss_table');
 
@@ -1578,7 +1602,7 @@ function alfa_business_locations_settings_section()
     $table_name = $wpdb->prefix . 'alfa_business_rrss';
 
     if (isset($_POST['alfa_business_rrss_nonce']) && ! wp_verify_nonce($_POST['alfa_business_rrss_nonce'], 'alfa_business_save_rrss')) {
-      echo '<div class="error"><p>Error de seguridad en Redes Sociales. Inténtalo de nuevo.</p></div>';
+      echo '<div class="error"><p>Error de seguridad en Parametros. Inténtalo de nuevo.</p></div>';
       return;
     }
 
@@ -1587,9 +1611,9 @@ function alfa_business_locations_settings_section()
       $record_id = intval($_POST['rrss_record_id']);
       $result    = $wpdb->delete($table_name, array('id' => $record_id), array('%d'));
       if ($result !== false) {
-        echo '<div class="updated"><p>Red social eliminada correctamente.</p></div>';
+        echo '<div class="updated"><p>Parametro eliminado correctamente.</p></div>';
       } else {
-        echo '<div class="error"><p>Error al eliminar la red social.</p></div>';
+        echo '<div class="error"><p>Error al eliminar la parametro.</p></div>';
       }
     }
 
@@ -1603,9 +1627,9 @@ function alfa_business_locations_settings_section()
       $format    = array('%s', '%s');
       $result    = $wpdb->update($table_name, $data, array('id' => $record_id), $format, array('%d'));
       if ($result !== false) {
-        echo '<div class="updated"><p>Red social actualizada correctamente.</p></div>';
+        echo '<div class="updated"><p>Parametro actualizado correctamente.</p></div>';
       } else {
-        echo '<div class="error"><p>Error al actualizar la red social.</p></div>';
+        echo '<div class="error"><p>Error al actualizar el parametro.</p></div>';
       }
     }
 
@@ -1618,9 +1642,9 @@ function alfa_business_locations_settings_section()
       $format = array('%s', '%s');
       $result = $wpdb->insert($table_name, $data, $format);
       if ($result !== false) {
-        echo '<div class="updated"><p>Red social agregada correctamente.</p></div>';
+        echo '<div class="updated"><p>Parametro agregado correctamente.</p></div>';
       } else {
-        echo '<div class="error"><p>Error al agregar la red social.</p></div>';
+        echo '<div class="error"><p>Error al agregar parametro.</p></div>';
       }
     }
 
@@ -1629,9 +1653,9 @@ function alfa_business_locations_settings_section()
       $result = $wpdb->query("TRUNCATE TABLE $table_name");
       if ($result !== false) {
         wp_cache_flush();
-        echo '<div class="updated"><p>La tabla de Redes Sociales ha sido vaciada correctamente.</p></div>';
+        echo '<div class="updated"><p>La tabla de parametros ha sido vaciada correctamente.</p></div>';
       } else {
-        echo '<div class="error"><p>Error al vaciar la tabla de Redes Sociales.</p></div>';
+        echo '<div class="error"><p>Error al vaciar la tabla de parametros</p></div>';
       }
     }
   }
@@ -1656,7 +1680,7 @@ function alfa_business_locations_settings_section()
     ?>
     <div class="wrap">
       <hr>
-      <h2><?php echo $editing ? "Editar Red Social" : "Agregar Red Social"; ?></h2>
+      <h2><?php echo $editing ? "Editar Parametro" : "Agregar Parametro"; ?></h2>
       <form method="post" action="">
         <?php wp_nonce_field('alfa_business_save_rrss', 'alfa_business_rrss_nonce'); ?>
         <?php if ($editing) : ?>
@@ -1677,24 +1701,24 @@ function alfa_business_locations_settings_section()
               </td>
             </tr>
             <tr>
-              <th scope="row"><label for="valor">Valor (URL)</label></th>
+              <th scope="row"><label for="valor">Valor (Parametro)</label></th>
               <td>
                 <input type="url" name="valor" id="valor" placeholder="https://www.facebook.com/tuempresa" class="regular-text" required value="<?php echo $editing ? esc_attr($edit_record['valor']) : ''; ?>">
               </td>
             </tr>
           </table>
           <?php if ($editing) : ?>
-            <?php submit_button('Actualizar Red Social', 'primary', 'update_rrss', false); ?>
+            <?php submit_button('Actualizar Parametro', 'primary', 'update_rrss', false); ?>
             <a href="<?php echo admin_url('admin.php?page=alfa-business-p'); ?>" class="button">Cancelar Edición</a>
           <?php else : ?>
-            <?php submit_button('Agregar Red Social', 'primary', 'alfa_business_add_rrss', false); ?>
+            <?php submit_button('Agregar Parametro', 'primary', 'alfa_business_add_rrss', false); ?>
           <?php endif; ?>
       </form>
       <hr>
       <h2>Listado de Redes Sociales</h2>
       <form method="post" action="">
         <?php wp_nonce_field('alfa_business_save_rrss', 'alfa_business_rrss_nonce'); ?>
-        <?php submit_button('Resetear Tabla de Redes Sociales', 'secondary', 'reset_rrss_table', false); ?>
+        <?php submit_button('Resetear Tabla de Parametros', 'secondary', 'reset_rrss_table', false); ?>
       </form>
       <?php
       $rrss = $wpdb->get_results("SELECT * FROM $table_name", ARRAY_A);
@@ -1705,7 +1729,7 @@ function alfa_business_locations_settings_section()
             <tr>
               <th>ID</th>
               <th>Descripción</th>
-              <th>Valor (URL)</th>
+              <th>Valor (Parametro)</th>
               <th>Acciones</th>
             </tr>
           </thead>
@@ -1719,7 +1743,7 @@ function alfa_business_locations_settings_section()
                   <form method="post" style="display:inline;">
                     <?php wp_nonce_field('alfa_business_save_rrss', 'alfa_business_rrss_nonce'); ?>
                     <input type="hidden" name="rrss_record_id" value="<?php echo esc_attr($item['id']); ?>">
-                    <input type="submit" name="delete_rrss" class="button" value="Eliminar" onclick="return confirm('¿Seguro que deseas eliminar esta red social?');">
+                    <input type="submit" name="delete_rrss" class="button" value="Eliminar" onclick="return confirm('¿Seguro que deseas eliminar este parametro?');">
                   </form>
                   <a href="<?php echo admin_url('admin.php?page=alfa-business-p&action=edit_rrss&record_id=' . intval($item['id'])); ?>" class="button">Editar</a>
                 </td>
@@ -1729,7 +1753,7 @@ function alfa_business_locations_settings_section()
         </table>
       <?php
       } else {
-        echo '<p>No se han registrado redes sociales.</p>';
+        echo '<p>No se han registrado parametros.</p>';
       }
       ?>
     </div>
