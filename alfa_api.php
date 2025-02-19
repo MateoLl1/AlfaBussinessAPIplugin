@@ -71,18 +71,19 @@ function alfa_business_permission_callback(WP_REST_Request $request)
 ============================================================================ */
 
 // Endpoint: /alfabusiness/api/v1/web
-
-
 add_action('rest_api_init', function () {
   register_rest_route('alfabusiness/api/v1', '/web', array(
-    'methods'  => 'GET',
-    'callback' => 'get_web_data',
+    'methods'             => 'GET',
+    'callback'            => 'get_web_data',
     'permission_callback' => 'alfa_business_permission_callback'
   ));
 });
 
 function get_web_data(WP_REST_Request $request)
 {
+  // Obtiene el parámetro uid (opcional)
+  $uid = $request->get_param('uid');
+
   // 1. Obtener Páginas y Entradas
   $args = array(
     'post_type'   => array('page', 'post'),
@@ -104,8 +105,9 @@ function get_web_data(WP_REST_Request $request)
     $paginas_y_entradas[] = array(
       'Tipo'      => $type,
       'Nombre'    => get_the_title($item->ID),
-      'URL'       => get_permalink($item->ID),
-      'Contenido' => $cleaned_content,
+      // Se adjunta el uid a la URL usando la función auxiliar
+      'URL'       => append_uid_to_url(get_permalink($item->ID), $uid),
+      'Contenido' => $cleaned_content
     );
   }
 
@@ -145,7 +147,7 @@ function get_web_data(WP_REST_Request $request)
 
       $sucursal_data[] = array(
         'Nombre'    => get_the_title($sucursal->ID),
-        'URL'       => get_permalink($sucursal->ID),
+        'URL'       => append_uid_to_url(get_permalink($sucursal->ID), $uid),
         'Contenido' => $cleaned_content,
       );
     }
@@ -153,18 +155,19 @@ function get_web_data(WP_REST_Request $request)
 
   // Armamos el arreglo final de datos a retornar
   $data = array(
-    'paginas_y_entradas'    => $paginas_y_entradas,
-    'categorias_productos'  => $cat_data,
-    'sucursales'            => $sucursal_data,
+    'paginas_y_entradas'   => $paginas_y_entradas,
+    'categorias_productos' => $cat_data,
+    'sucursales'           => $sucursal_data,
   );
 
   return new WP_REST_Response(array('Datos' => $data), 200);
 }
 
-// Endpoint: /alfabusiness/api/v1/commerce/keywords
+
+// Endpoint: /alfabusiness/api/v1/keywords/commerce
 
 add_action('rest_api_init', function () {
-  register_rest_route('alfabusiness/api/v1', '/commerce/keywords', array(
+  register_rest_route('alfabusiness/api/v1', 'keywords/commerce', array(
     'methods'  => 'GET',
     'callback' => 'get_product_keywords',
     'permission_callback' => 'alfa_business_permission_callback'
@@ -283,9 +286,9 @@ function get_product_keywords(WP_REST_Request $request)
 }
 
 
-// Endpoint: /alfabusiness/api/v1/web/keywords
+// Endpoint: /alfabusiness/api/v1/general/keywords
 add_action('rest_api_init', function () {
-  register_rest_route('alfabusiness/api/v1', '/web/keywords', array(
+  register_rest_route('alfabusiness/api/v1', '/general/keywords', array(
     'methods'  => 'GET',
     'callback' => 'get_page_keywords',
     'permission_callback' => 'alfa_business_permission_callback'
@@ -404,14 +407,7 @@ function get_page_keywords(WP_REST_Request $request)
 }
 
 
-// Endpoint: /alfabusiness/api/v1/general/keywords
-add_action('rest_api_init', function () {
-  register_rest_route('alfabusiness/api/v1', '/general/keywords', array(
-    'methods'  => 'GET',
-    'callback' => 'get_general_keywords',
-    'permission_callback' => 'alfa_business_permission_callback'
-  ));
-});
+
 
 function get_general_keywords(WP_REST_Request $request)
 {
@@ -673,6 +669,7 @@ add_action('rest_api_init', function () {
     'permission_callback' => 'alfa_business_permission_callback'
   ));
 });
+
 
 function search_pages_by_keywords(WP_REST_Request $request)
 {
