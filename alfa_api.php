@@ -819,6 +819,28 @@ function search_general_by_keywords(WP_REST_Request $request)
 }
 
 
+// Función auxiliar para eliminar claves con valor 0 recursivamente
+function eliminar_valores_cero($data)
+{
+  if (is_array($data)) {
+    foreach ($data as $key => $value) {
+      // Si es un array, aplicar recursividad
+      if (is_array($value)) {
+        $data[$key] = eliminar_valores_cero($value);
+        // Si el array resultante está vacío, se elimina la clave
+        if (empty($data[$key])) {
+          unset($data[$key]);
+        }
+      } else {
+        // Si el valor es exactamente 0 o 0.0, se elimina la clave
+        if ($value === 0 || $value === 0.0) {
+          unset($data[$key]);
+        }
+      }
+    }
+  }
+  return $data;
+}
 
 // Endpoint: /alfabusiness/api/v1/metrics
 add_action('rest_api_init', function () {
@@ -942,34 +964,65 @@ function get_metrics_data(WP_REST_Request $request)
   }
 
   // ----------------------------
-  // Métricas de Tracking (basadas en uids)
+  // Métricas de Tracking
+  // Separamos por uid y ga_uid
   // ----------------------------
   $tabla_tracking = $wpdb->prefix . 'seguimiento_usuario';
-  $registered_uids = $wpdb->get_col("SELECT DISTINCT uid FROM {$tabla_tracking}");
-  $registered_users_count = is_array($registered_uids) ? count($registered_uids) : 0;
-
   $today_start = date('Y-m-d') . " 00:00:00";
-  $today_uids = $wpdb->get_col($wpdb->prepare("SELECT DISTINCT uid FROM {$tabla_tracking} WHERE fecha >= %s", $today_start));
-  $today_users_count = is_array($today_uids) ? count($today_uids) : 0;
+
+  // Métricas basadas en la columna uid
+  $registered_uids = $wpdb->get_col("SELECT DISTINCT uid FROM {$tabla_tracking} WHERE uid IS NOT NULL AND uid <> ''");
+  $registered_uid_count = is_array($registered_uids) ? count($registered_uids) : 0;
+
+  $today_uids = $wpdb->get_col(
+    $wpdb->prepare(
+      "SELECT DISTINCT uid FROM {$tabla_tracking} WHERE fecha >= %s AND uid IS NOT NULL AND uid <> ''",
+      $today_start
+    )
+  );
+  $today_uid_count = is_array($today_uids) ? count($today_uids) : 0;
+
+  // Métricas basadas en la columna ga_uid
+  $registered_ga = $wpdb->get_col("SELECT DISTINCT ga_uid FROM {$tabla_tracking} WHERE ga_uid IS NOT NULL AND ga_uid <> ''");
+  $registered_ga_count = is_array($registered_ga) ? count($registered_ga) : 0;
+
+  $today_ga = $wpdb->get_col(
+    $wpdb->prepare(
+      "SELECT DISTINCT ga_uid FROM {$tabla_tracking} WHERE fecha >= %s AND ga_uid IS NOT NULL AND ga_uid <> ''",
+      $today_start
+    )
+  );
+  $today_ga_count = is_array($today_ga) ? count($today_ga) : 0;
 
   $tracking_metrics = array(
-    'registered_users_count' => $registered_users_count,
-    'today_users_count'      => $today_users_count,
-    'today_users'            => $today_uids,
+    'uid_metrics' => array(
+      'registered_users_count' => $registered_uid_count,
+      'today_users_count'      => $today_uid_count,
+      'today_users'            => $today_uids,
+    ),
+    'ga_metrics' => array(
+      'registered_users_count' => $registered_ga_count,
+      'today_users_count'      => $today_ga_count,
+      'today_users'            => $today_ga,
+    ),
   );
 
-  // Combinar métricas en dos objetos: uno para "web" y otro para "tracking"
+  // ----------------------------
+  // Combinar todas las métricas en dos grandes bloques: web y tracking
+  // ----------------------------
   $data = array(
-    'web' => array(
-      'web_info'    => $web_metrics,
-      'ecommerce'   => $ecommerce_metrics,
+    'web'      => array(
+      'web_info'  => $web_metrics,
+      'ecommerce' => $ecommerce_metrics,
     ),
     'tracking' => $tracking_metrics,
   );
 
+  // Eliminar claves con valor 0 de forma recursiva
+  $data = eliminar_valores_cero($data);
+
   return new WP_REST_Response($data, 200);
 }
-
 
 
 
@@ -1027,9 +1080,10 @@ function alfa_business_get_locations(WP_REST_Request $request)
 if (! function_exists('su_obtener_ip')) {
   function su_obtener_ip()
   {
-    return !empty($_SERVER['REMOTE_ADDR']) ? sanitize_text_field($_SERVER['REMOTE_ADDR']) : 'sin_ip';
+    return ! empty($_SERVER['REMOTE_ADDR']) ? sanitize_text_field($_SERVER['REMOTE_ADDR']) : 'sin_ip';
   }
 }
+
 if (! function_exists('su_determinar_tipo_dispositivo')) {
   function su_determinar_tipo_dispositivo($user_agent)
   {
@@ -1040,6 +1094,7 @@ if (! function_exists('su_determinar_tipo_dispositivo')) {
     return 'desktop';
   }
 }
+
 if (! function_exists('su_obtener_ubicacion')) {
   function su_obtener_ubicacion($ip_address)
   {
@@ -1055,11 +1110,12 @@ function su_crear_tabla_seguimiento()
   global $wpdb;
   $tabla = $wpdb->prefix . 'seguimiento_usuario';
   $charset_collate = $wpdb->get_charset_collate();
-  // Se incluyen las columnas adicionales: parámetros, device_type y location.
+  // Se agregan las columnas: uid y ga_uid, además de las demás.
   if ($wpdb->get_var("SHOW TABLES LIKE '{$tabla}'") != $tabla) {
     $sql = "CREATE TABLE {$tabla} (
             id BIGINT(20) UNSIGNED NOT NULL AUTO_INCREMENT,
-            uid VARCHAR(255) NOT NULL,
+            uid VARCHAR(255) DEFAULT NULL,
+            ga_uid VARCHAR(255) DEFAULT NULL,
             url TEXT NOT NULL,
             parametros TEXT DEFAULT NULL,
             ip_address VARCHAR(45) DEFAULT NULL,
@@ -1069,7 +1125,8 @@ function su_crear_tabla_seguimiento()
             location VARCHAR(255) DEFAULT NULL,
             fecha DATETIME DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
-            INDEX(uid)
+            INDEX(uid),
+            INDEX(ga_uid)
         ) {$charset_collate};";
     require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
     dbDelta($sql);
@@ -1078,6 +1135,7 @@ function su_crear_tabla_seguimiento()
     error_log("Tabla {$tabla} ya existe.");
   }
 }
+
 
 // (2) Captura el parámetro uid desde GET, establece la cookie y registra la visita.
 function su_capturar_us_id()
@@ -1088,7 +1146,7 @@ function su_capturar_us_id()
     $current_url = home_url($_SERVER['REQUEST_URI']);
     $parametros = $_GET;
     error_log("Capturado uid: {$uid} en URL: {$current_url}");
-    su_guardar_visita($uid, $current_url, $parametros);
+    su_guardar_visita($uid, null, $current_url, $parametros); // Solo se envía uid aquí
     // Establece la cookie para futuros registros (10 años)
     setcookie('su_uid', $uid, time() + (10 * YEAR_IN_SECONDS), COOKIEPATH, COOKIE_DOMAIN);
     $_COOKIE['su_uid'] = $uid;
@@ -1096,32 +1154,31 @@ function su_capturar_us_id()
 }
 add_action('init', 'su_capturar_us_id', 1);
 
-// (3) Registra actividad en cada carga de página si existe la cookie.
+
+// (3) Registra actividad en cada carga de página utilizando ambas cookies (su_uid y _ga)
 function su_registrar_actividad()
 {
-  if (isset($_COOKIE['su_uid']) && !empty($_COOKIE['su_uid'])) {
-    $uid = sanitize_text_field($_COOKIE['su_uid']);
-    $current_url = home_url($_SERVER['REQUEST_URI']);
-    $parametros = $_GET;
-    error_log("Registrando actividad para uid: {$uid} en URL: {$current_url}");
-    global $wpdb;
-    $tabla = $wpdb->prefix . 'seguimiento_usuario';
-    $ultima_visita = $wpdb->get_row(
-      $wpdb->prepare("SELECT url FROM {$tabla} WHERE uid = %s ORDER BY fecha DESC LIMIT 1", $uid)
-    );
-    if (! $ultima_visita || $ultima_visita->url !== $current_url) {
-      su_guardar_visita($uid, $current_url, $parametros);
-    } else {
-      error_log("URL ya registrada previamente para uid: {$uid}");
-    }
+  $current_url = home_url($_SERVER['REQUEST_URI']);
+  $parametros = $_GET;
+
+  // Capturamos los valores (si existen)
+  $uid = (isset($_COOKIE['su_uid']) && !empty($_COOKIE['su_uid'])) ? sanitize_text_field($_COOKIE['su_uid']) : null;
+  $ga_uid = (isset($_COOKIE['_ga']) && !empty($_COOKIE['_ga'])) ? sanitize_text_field($_COOKIE['_ga']) : null;
+
+  // Si al menos uno de los identificadores existe, se registra la visita.
+  if ($uid || $ga_uid) {
+    error_log("Registrando actividad en URL: {$current_url} para uid: {$uid} y ga_uid: {$ga_uid}");
+    // Aquí podrías hacer una verificación para evitar registros duplicados si lo deseas.
+    su_guardar_visita($uid, $ga_uid, $current_url, $parametros);
   } else {
-    error_log("su_registrar_actividad: No se encontró la cookie su_uid.");
+    error_log("su_registrar_actividad: No se encontró ni la cookie su_uid ni _ga.");
   }
 }
 add_action('wp', 'su_registrar_actividad', 1);
 
-// (4) Inserta un registro de visita en la base de datos.
-function su_guardar_visita($uid, $url, $parametros)
+
+// (4) Inserta un registro de visita en la base de datos, almacenando uid y ga_uid.
+function su_guardar_visita($uid = null, $ga_uid = null, $url, $parametros)
 {
   global $wpdb;
   $tabla = $wpdb->prefix . 'seguimiento_usuario';
@@ -1131,11 +1188,12 @@ function su_guardar_visita($uid, $url, $parametros)
   $device_type = su_determinar_tipo_dispositivo($user_agent);
   $location = su_obtener_ubicacion($ip_address);
   $parametros_json = !empty($parametros) ? wp_json_encode($parametros) : null;
-  error_log("Ejecutando su_guardar_visita() para uid: {$uid} en URL: {$url}");
+  error_log("Ejecutando su_guardar_visita() para uid: {$uid} y ga_uid: {$ga_uid} en URL: {$url}");
   $resultado = $wpdb->insert(
     $tabla,
     array(
       'uid'         => $uid,
+      'ga_uid'      => $ga_uid,
       'url'         => $url,
       'parametros'  => $parametros_json,
       'ip_address'  => $ip_address,
@@ -1145,15 +1203,37 @@ function su_guardar_visita($uid, $url, $parametros)
       'location'    => $location,
       'fecha'       => current_time('mysql')
     ),
-    array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
+    array('%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s')
   );
   if ($resultado === false) {
     error_log("Error al insertar visita para uid: {$uid}. Error: " . $wpdb->last_error);
   } else {
-    error_log("Visita registrada para uid: {$uid} en URL: {$url}");
+    error_log("Visita registrada para uid: {$uid} y ga_uid: {$ga_uid} en URL: {$url}");
   }
 }
 
+// (5) Función para limpiar la tabla de seguimiento y crearla de nuevo,
+//     insertando inmediatamente una nueva fila con los valores actuales de las cookies.
+function su_limpiar_tabla_seguimiento()
+{
+  global $wpdb;
+  $tabla = $wpdb->prefix . 'seguimiento_usuario';
+  // Eliminar la tabla actual.
+  $sql = "DROP TABLE IF EXISTS {$tabla}";
+  $wpdb->query($sql);
+  error_log("Tabla {$tabla} eliminada.");
+  // Recrear la tabla.
+  su_crear_tabla_seguimiento();
+  // Registrar una nueva fila con las cookies actuales
+  $uid = (isset($_COOKIE['su_uid']) && !empty($_COOKIE['su_uid'])) ? sanitize_text_field($_COOKIE['su_uid']) : null;
+  $ga_uid = (isset($_COOKIE['_ga']) && !empty($_COOKIE['_ga'])) ? sanitize_text_field($_COOKIE['_ga']) : null;
+  $current_url = home_url($_SERVER['REQUEST_URI']);
+  $parametros = $_GET;
+  error_log("Insertando registro inicial en tabla de seguimiento para uid: {$uid} y ga_uid: {$ga_uid} en URL: {$current_url}");
+  su_guardar_visita($uid, $ga_uid, $current_url, $parametros);
+}
+
+// (6) Registro del endpoint REST para obtener historial (modificado para aceptar uid y ga opcionales)
 function su_registrar_endpoint_api()
 {
   register_rest_route('alfabusiness/api/v1', '/user', array(
@@ -1161,12 +1241,13 @@ function su_registrar_endpoint_api()
     'callback'            => 'su_obtener_historial',
     'args'                => array(
       'uid' => array(
-        'required'          => true,
+        'required'          => false,
         'sanitize_callback' => 'sanitize_text_field',
-        'validate_callback' => function ($param, $request, $key) {
-          return is_string($param) && !empty($param);
-        }
-      )
+      ),
+      'ga' => array(
+        'required'          => false,
+        'sanitize_callback' => 'sanitize_text_field',
+      ),
     ),
     'permission_callback' => 'alfa_business_permission_callback'
   ));
@@ -1176,18 +1257,43 @@ add_action('rest_api_init', 'su_registrar_endpoint_api');
 
 function su_obtener_historial(WP_REST_Request $request)
 {
-  $uid = $request->get_param('uid');
   global $wpdb;
+  $uid   = $request->get_param('uid');
+  $ga    = $request->get_param('ga');
   $tabla = $wpdb->prefix . 'seguimiento_usuario';
-  $resultados = $wpdb->get_results(
-    $wpdb->prepare("SELECT * FROM {$tabla} WHERE uid = %s ORDER BY fecha DESC", $uid),
-    ARRAY_A
-  );
-  if (empty($resultados)) {
-    error_log("No se encontró historial para uid: {$uid}");
-    return new WP_Error('no_data', 'No se encontró historial para este uid.', array('status' => 404));
+
+  // Si no se envía ninguno de los parámetros, se retorna un error.
+  if (empty($uid) && empty($ga)) {
+    return new WP_Error('missing_param', 'Se requiere al menos uno de los parámetros: uid o ga.', array('status' => 400));
   }
-  error_log("Historial obtenido para uid: {$uid}");
+
+  // Si se envían ambos parámetros, se buscan registros que coincidan en uid o en ga_uid.
+  if (!empty($uid) && !empty($ga)) {
+    $resultados = $wpdb->get_results(
+      $wpdb->prepare("SELECT * FROM {$tabla} WHERE uid = %s OR ga_uid = %s ORDER BY fecha DESC", $uid, $ga),
+      ARRAY_A
+    );
+  }
+  // Si se envía solo uid
+  elseif (!empty($uid)) {
+    $resultados = $wpdb->get_results(
+      $wpdb->prepare("SELECT * FROM {$tabla} WHERE uid = %s ORDER BY fecha DESC", $uid),
+      ARRAY_A
+    );
+  }
+  // Si se envía solo ga (corresponde al valor de _ga)
+  else {
+    $resultados = $wpdb->get_results(
+      $wpdb->prepare("SELECT * FROM {$tabla} WHERE ga_uid = %s ORDER BY fecha DESC", $ga),
+      ARRAY_A
+    );
+  }
+
+  if (empty($resultados)) {
+    error_log("No se encontró historial para uid: {$uid} y ga: {$ga}");
+    return new WP_Error('no_data', 'No se encontró historial para el/los parámetros proporcionados.', array('status' => 404));
+  }
+  error_log("Historial obtenido para uid: {$uid} y ga: {$ga}");
   return rest_ensure_response($resultados);
 }
 
@@ -1673,12 +1779,6 @@ function alfa_business_locations_settings_section()
         $editing = true;
       }
     }
-
-
-    /* ============================================================================
-      SECTION 6: SEGUIMIENTO NATIVO
-    ============================================================================ */
-
 
 
     ?>
