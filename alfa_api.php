@@ -1666,11 +1666,11 @@ function alfa_business_locations_settings_section()
         </tr>
         <tr>
           <th scope="row"><label for="lat">Latitud</label></th>
-          <td><input type="number" step="0.000001" name="lat" id="lat" placeholder="-0.176281" class="regular-text" required value="<?php echo $editing ? esc_attr($edit_record['lat']) : ''; ?>"></td>
+          <td><input type="number" step="any" name="lat" id="lat" placeholder="-0.176281" class="regular-text" required value="<?php echo $editing ? esc_attr($edit_record['lat']) : ''; ?>"></td>
         </tr>
         <tr>
           <th scope="row"><label for="lng">Longitud</label></th>
-          <td><input type="number" step="0.000001" name="lng" id="lng" placeholder="-78.485821" class="regular-text" required value="<?php echo $editing ? esc_attr($edit_record['lng']) : ''; ?>"></td>
+          <td><input type="number" step="any" name="lng" id="lng" placeholder="-78.485821" class="regular-text" required value="<?php echo $editing ? esc_attr($edit_record['lng']) : ''; ?>"></td>
         </tr>
         <tr>
           <th scope="row"><label for="telefono">Teléfono</label></th>
