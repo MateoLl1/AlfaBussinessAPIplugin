@@ -587,77 +587,96 @@ add_action('rest_api_init', function () {
 function search_products_by_keywords(WP_REST_Request $request)
 {
   // Obtener parámetros
-  $keywords_param = $request->get_param('keywords');
-  $limit_param    = $request->get_param('limit');
-  $uid_param      = $request->get_param('uid'); // Parámetro uid opcional
+  $keywords_param   = $request->get_param('keywords');
+  $categories_param = $request->get_param('categories'); // Nuevo parámetro
+  $limit_param      = $request->get_param('limit');
+  $uid_param        = $request->get_param('uid');
 
   if (empty($keywords_param)) {
     return new WP_Error('missing_keywords', 'El parámetro keywords es obligatorio.', array('status' => 400));
   }
 
-  // Procesar las keywords
-  $keywords_array = array_map('trim', explode(',', $keywords_param));
-  $keywords_array = array_map('strtolower', $keywords_array);
-  $limit = $limit_param ? intval($limit_param) : 10;
+  // Procesar keywords
+  $keywords_array = array_filter(array_map('trim', explode(',', strtolower($keywords_param))));
 
-  // Obtener todos los productos publicados
-  $products = get_posts(array(
+  // Procesar categorías (opcional)
+  $categories_array = array();
+  if (!empty($categories_param)) {
+    $categories_array = array_filter(array_map('trim', explode(',', strtolower($categories_param))));
+  }
+
+  // Construir args para get_posts
+  $args = array(
     'post_type'   => 'product',
     'post_status' => 'publish',
     'numberposts' => -1,
-  ));
+  );
 
-  $results = array();
+  // Si especificaron categorías, filtramos por product_cat
+  if (!empty($categories_array)) {
+    $args['tax_query'] = array(
+      array(
+        'taxonomy' => 'product_cat',
+        'field'    => 'slug',      // usa 'term_id' si envías IDs
+        'terms'    => $categories_array,
+      ),
+    );
+  }
+
+  // Obtener productos
+  $products = get_posts($args);
+  $results  = array();
 
   foreach ($products as $product) {
-    $product_id  = $product->ID;
-    $title       = get_the_title($product_id);
-    $raw_content = $product->post_content;
-    $plain_content = clean_content($raw_content);
+    $product_id    = $product->ID;
+    $title         = get_the_title($product_id);
+    $plain_content = clean_content($product->post_content);
+    $text          = strtolower($title . ' ' . $plain_content);
 
-    // Preparar el texto de búsqueda combinando título y contenido limpio
-    $text = strtolower($title . ' ' . $plain_content);
+    // Contar coincidencias de keywords
     $match_count = 0;
-    foreach ($keywords_array as $keyword) {
-      if (!empty($keyword)) {
-        $match_count += substr_count($text, $keyword);
-      }
+    foreach ($keywords_array as $kw) {
+      $match_count += substr_count($text, $kw);
     }
 
-    // Incluir el producto si se encontró al menos una coincidencia
     if ($match_count > 0) {
+      // Datos adicionales de WooCommerce
       $additional_data = array();
       if (function_exists('wc_get_product')) {
-        $wc_product = wc_get_product($product_id);
-        if ($wc_product) {
+        $wc = wc_get_product($product_id);
+        if ($wc) {
           $additional_data = array(
-            'short_description' => wp_strip_all_tags($wc_product->get_short_description()),
-            'price'             => $wc_product->get_price(),
-            'regular_price'     => $wc_product->get_regular_price(),
-            'sale_price'        => $wc_product->get_sale_price(),
-            'sku'               => $wc_product->get_sku(),
-            'image'             => get_the_post_thumbnail_url($product_id, 'full')
+            'short_description' => wp_strip_all_tags($wc->get_short_description()),
+            'price'             => $wc->get_price(),
+            'regular_price'     => $wc->get_regular_price(),
+            'sale_price'        => $wc->get_sale_price(),
+            'sku'               => $wc->get_sku(),
+            'image'             => get_the_post_thumbnail_url($product_id, 'full'),
           );
         }
       }
+
       $results[] = array_merge(array(
         'ID'          => $product_id,
         'title'       => $title,
         'url'         => append_uid_to_url(get_permalink($product_id), $uid_param),
         'content'     => $plain_content,
-        'match_count' => $match_count
+        'match_count' => $match_count,
       ), $additional_data);
     }
   }
 
-  // Ordenar resultados por relevancia y limitar la cantidad devuelta
+  // Ordenar y limitar
   usort($results, function ($a, $b) {
     return $b['match_count'] - $a['match_count'];
   });
+  $limit   = $limit_param ? intval($limit_param) : 10;
   $results = array_slice($results, 0, $limit);
 
   return new WP_REST_Response(array('results' => $results), 200);
 }
+
+
 
 
 // Endpoint: /alfabusiness/api/v1/search/pages
