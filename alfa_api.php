@@ -72,95 +72,85 @@ function alfa_business_permission_callback(WP_REST_Request $request)
 
 // Endpoint: /alfabusiness/api/v1/web
 add_action('rest_api_init', function () {
-  register_rest_route('alfabusiness/api/v1', '/web', array(
-    'methods'             => 'GET',
-    'callback'            => 'get_web_data',
-    'permission_callback' => 'alfa_business_permission_callback'
-  ));
+  register_rest_route('alfabusiness/api/v1', '/web', [
+    'methods'  => 'GET',
+    'callback' => 'get_web_data',
+  ]);
 });
 
 function get_web_data(WP_REST_Request $request)
 {
-  // Obtiene el parámetro uid (opcional)
   $uid = $request->get_param('uid');
 
-  // 1. Obtener Páginas y Entradas
-  $args = array(
-    'post_type'   => array('page', 'post'),
+  // 1. Páginas y Entradas
+  $items = get_posts([
+    'post_type'   => ['page', 'post'],
     'post_status' => 'publish',
     'numberposts' => -1,
-  );
-  $items = get_posts($args);
-  $paginas_y_entradas = array();
-
+  ]);
+  $paginas_y_entradas = [];
   foreach ($items as $item) {
-    $content = get_post_field('post_content', $item->ID);
-    $content = strip_shortcodes($content);
-    $content = preg_replace('/\[[^\]]*\]/', '', $content);
-    $content = wp_strip_all_tags($content);
-    $cleaned_content = trim(preg_replace('/\s+/', ' ', $content));
-
-    $type = ($item->post_type === 'page') ? 'Página' : 'Entrada';
-
-    $paginas_y_entradas[] = array(
-      'Tipo'      => $type,
+    $raw = strip_shortcodes($item->post_content);
+    $raw = preg_replace('/\[[^\]]*\]/', '', $raw);
+    $clean = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($raw)));
+    $paginas_y_entradas[] = [
+      'Tipo'      => $item->post_type === 'page' ? 'Página' : 'Entrada',
       'Nombre'    => get_the_title($item->ID),
-      // Se adjunta el uid a la URL usando la función auxiliar
       'URL'       => append_uid_to_url(get_permalink($item->ID), $uid),
-      'Contenido' => $cleaned_content
-    );
+      'Contenido' => $clean,
+    ];
   }
 
-  // 2. Obtener Categorías de Productos (estructura únicamente)
-  $cat_data = array();
+  // 2. Categorías de Productos
+  $cat_data = [];
   if (taxonomy_exists('product_cat')) {
-    $categories = get_terms(array(
-      'taxonomy'   => 'product_cat',
-      'hide_empty' => false,
-    ));
-
-    foreach ($categories as $cat) {
-      $cat_data[] = array(
+    foreach (get_terms(['taxonomy' => 'product_cat', 'hide_empty' => false]) as $cat) {
+      $cat_data[] = [
         'ID'     => $cat->term_id,
         'Nombre' => $cat->name,
         'Slug'   => $cat->slug,
         'Padre'  => $cat->parent,
-      );
+      ];
     }
   }
 
-  // 3. Obtener Sucursales (suponiendo que se ha definido el CPT 'sucursal')
-  $sucursal_data = array();
+  // 3. Sucursales (CPT 'sucursal')
+  $sucursal_data = [];
   if (post_type_exists('sucursal')) {
-    $sucursales = get_posts(array(
-      'post_type'   => 'sucursal',
-      'post_status' => 'publish',
-      'numberposts' => -1,
-    ));
-
-    foreach ($sucursales as $sucursal) {
-      $content = get_post_field('post_content', $sucursal->ID);
-      $content = strip_shortcodes($content);
-      $content = preg_replace('/\[[^\]]*\]/', '', $content);
-      $content = wp_strip_all_tags($content);
-      $cleaned_content = trim(preg_replace('/\s+/', ' ', $content));
-
-      $sucursal_data[] = array(
-        'Nombre'    => get_the_title($sucursal->ID),
-        'URL'       => append_uid_to_url(get_permalink($sucursal->ID), $uid),
-        'Contenido' => $cleaned_content,
-      );
+    foreach (get_posts(['post_type' => 'sucursal', 'post_status' => 'publish', 'numberposts' => -1]) as $suc) {
+      $raw = strip_shortcodes($suc->post_content);
+      $raw = preg_replace('/\[[^\]]*\]/', '', $raw);
+      $clean = trim(preg_replace('/\s+/', ' ', wp_strip_all_tags($raw)));
+      $sucursal_data[] = [
+        'Nombre'    => get_the_title($suc->ID),
+        'URL'       => append_uid_to_url(get_permalink($suc->ID), $uid),
+        'Contenido' => $clean,
+      ];
     }
   }
 
-  // Armamos el arreglo final de datos a retornar
-  $data = array(
+  // 4. Brands de Productos
+  $brand_data = [];
+  if (taxonomy_exists('product_brand')) {
+    foreach (get_terms(['taxonomy' => 'product_brand', 'hide_empty' => false]) as $br) {
+      $brand_data[] = [
+        'ID'     => $br->term_id,
+        'Nombre' => $br->name,
+        'Slug'   => $br->slug,
+        'Padre'  => $br->parent,
+      ];
+    }
+  }
+
+  // 5. Respuesta final
+  $data = [
     'paginas_y_entradas'   => $paginas_y_entradas,
     'categorias_productos' => $cat_data,
     'sucursales'           => $sucursal_data,
-  );
+    'brands'               => $brand_data,
+  ];
 
-  return new WP_REST_Response(array('Datos' => $data), 200);
+  return rest_ensure_response(['Datos' => $data]);
 }
 
 
